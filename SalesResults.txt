@@ -1,0 +1,36 @@
+
+===== RUN =====
+=== SALES RESULTS ===
+Price catalogue: TC1.ProductList.json
+Sales record:    TC1.Sales.json
+
+Processed rows:  46
+Ignored rows:    0
+Unknown products ignored: 0
+
+TOTAL COST: 2481.86
+Elapsed time (s): 0.000721
+
+===== RUN =====
+=== SALES RESULTS ===
+Price catalogue: TC1.ProductList.json
+Sales record:    TC2.Sales.json
+
+Processed rows:  44
+Ignored rows:    2
+Unknown products ignored: 0
+
+TOTAL COST: 169478.22
+Elapsed time (s): 0.000546
+
+===== RUN =====
+=== SALES RESULTS ===
+Price catalogue: TC1.ProductList.json
+Sales record:    TC3.Sales.json
+
+Processed rows:  42
+Ignored rows:    4
+Unknown products ignored: 2
+
+TOTAL COST: 168145.36
+Elapsed time (s): 0.000401
