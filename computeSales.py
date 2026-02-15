@@ -2,18 +2,18 @@
 """
 Actividad 5.2 - Programa 1: Compute sales
 
-Lee 2 archivos JSON desde línea de comandos:
-  1) priceCatalogue.json  -> catálogo de productos con precio
-  2) salesRecord.json     -> registro de ventas (producto + cantidad)
+Invocación mínima (Req 5):
+    python computeSales.py priceCatalogue.json salesRecord.json
 
-Calcula el costo total de todas las ventas (sum(price(product) * quantity)),
-manejando datos inválidos (muestra warnings y continúa), imprime en consola y
-guarda evidencia en un archivo llamado SalesResults.txt.
+- priceCatalogue.json: catálogo con precios (lista de objetos con al menos: title, price)
+- salesRecord.json: registro de ventas (lista de objetos con al menos: Product, Quantity)
 
-Ejecución mínima (Req 5):
-  python computeSales.py priceCatalogue.json salesRecord.json
-
-Cumple PEP 8.
+El programa:
+- Calcula el costo total: sum(price(Product) * Quantity)
+- Maneja datos inválidos: muestra warnings y continúa (Req 3)
+- Imprime resultados y los guarda en SalesResults.txt (Req 2)
+- Incluye tiempo transcurrido (Req 7)
+- PEP 8 (Req 8)
 """
 
 from __future__ import annotations
@@ -25,232 +25,267 @@ import time
 from typing import Any, Dict, List, Tuple
 
 RESULTS_FILENAME = "SalesResults.txt"
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+RESULTS_PATH = os.path.join(SCRIPT_DIR, RESULTS_FILENAME)
 
 
 def fmt(number: float) -> str:
-    """Format numbers without scientific notation and with up to 2 decimals."""
-    # En ventas suele ser deseable 2 decimales; si te piden más, cámbialo a 8.
+    """Format numbers without scientific notation and up to 2 decimals."""
     return f"{number:.2f}"
 
 
-def safe_load_json(path: str) -> Any:
-    """Load JSON from disk with clear error messages."""
+def warn(message: str) -> None:
+    """Print warning to stderr."""
+    print(f"Warning: {message}", file=sys.stderr)
+
+
+def append_results(text: str) -> None:
+    """Append results to SalesResults.txt (evidence)."""
+    with open(RESULTS_PATH, "a", encoding="utf-8") as file:
+        file.write("\n===== RUN =====\n")
+        file.write(text)
+        file.write("\n")
+
+
+def load_json(path: str) -> Tuple[Any, List[str]]:
+    """Load JSON from a file. Returns (data, errors)."""
+    errors: List[str] = []
     try:
         with open(path, "r", encoding="utf-8") as file:
-            return json.load(file)
+            return json.load(file), errors
     except FileNotFoundError:
-        print(f"Error: file not found -> {path}")
-        raise
+        errors.append(f"File not found: {path}")
+    except PermissionError:
+        errors.append(f"Permission denied: {path}")
     except json.JSONDecodeError as exc:
-        print(f"Error: invalid JSON in {path} (line {exc.lineno}, col {exc.colno})")
-        raise
+        errors.append(f"Invalid JSON in {path}: line {exc.lineno}, col {exc.colno}")
+    return None, errors
 
 
-def build_catalogue_map(catalogue_json: Any) -> Dict[str, float]:
+def build_price_map(catalogue: Any) -> Tuple[Dict[str, float], List[str]]:
     """
-    Build a dictionary: product_title -> price.
+    Build a map: title -> price.
 
-    Expected catalogue format (based on your TC1.ProductList.json):
+    Expected format:
       [
         {"title": "...", "price": 28.1, ...},
         ...
       ]
     """
-    if not isinstance(catalogue_json, list):
-        raise ValueError("Catalogue JSON must be a list of product objects.")
+    if not isinstance(catalogue, list):
+        return {}, ["Catalogue JSON must be a list of products."]
 
-    catalogue: Dict[str, float] = {}
-    invalid_rows = 0
+    errors: List[str] = []
+    price_map: Dict[str, float] = {}
 
-    for idx, item in enumerate(catalogue_json, start=1):
+    for idx, item in enumerate(catalogue, start=1):
         if not isinstance(item, dict):
-            invalid_rows += 1
-            print(f"Warning (catalogue row {idx}): not an object -> ignored")
+            errors.append(f"Catalogue row #{idx}: not an object -> ignored")
             continue
 
         title = item.get("title")
         price = item.get("price")
 
-        if not isinstance(title, str) or title.strip() == "":
-            invalid_rows += 1
-            print(f"Warning (catalogue row {idx}): missing/invalid title -> ignored")
+        if not isinstance(title, str) or not title.strip():
+            errors.append(f"Catalogue row #{idx}: missing/invalid title -> ignored")
             continue
 
         try:
             price_value = float(price)
         except (TypeError, ValueError):
-            invalid_rows += 1
-            print(
-                f"Warning (catalogue row {idx}): invalid price for '{title}' -> ignored"
-            )
+            errors.append(f"Catalogue row #{idx}: invalid price for '{title}' -> ignored")
             continue
 
-        # Si hay duplicados, nos quedamos con el último (determinista).
-        catalogue[title.strip()] = price_value
+        price_map[title.strip()] = price_value
 
-    if invalid_rows > 0:
-        print(f"Info: catalogue invalid rows ignored: {invalid_rows}")
-
-    return catalogue
+    if not price_map:
+        errors.append("No valid products found in catalogue.")
+    return price_map, errors
 
 
-def extract_sales_rows(sales_json: Any) -> List[Dict[str, Any]]:
+def normalize_sales_record(sales: Any) -> Tuple[List[Dict[str, Any]], List[str]]:
     """
-    Validate that sales_json is a list of sale rows.
+    Ensure sales is a list of dict rows.
 
-    Expected sales format (based on your TC1.Sales.json):
+    Expected format:
       [
-        {"SALE_ID": 1, "SALE_Date": "...", "Product": "...", "Quantity": 2},
+        {"Product": "...", "Quantity": 2, ...},
         ...
       ]
     """
-    if not isinstance(sales_json, list):
-        raise ValueError("Sales JSON must be a list of sale objects.")
+    if not isinstance(sales, list):
+        return [], ["Sales JSON must be a list of sales rows."]
 
+    errors: List[str] = []
     rows: List[Dict[str, Any]] = []
-    for idx, item in enumerate(sales_json, start=1):
+
+    for idx, item in enumerate(sales, start=1):
         if not isinstance(item, dict):
-            print(f"Warning (sales row {idx}): not an object -> ignored")
+            errors.append(f"Sales row #{idx}: not an object -> ignored")
             continue
         rows.append(item)
-    return rows
+
+    if not rows:
+        errors.append("No valid sales rows found.")
+    return rows, errors
 
 
 def compute_total(
-    catalogue: Dict[str, float],
+    price_map: Dict[str, float],
     sales_rows: List[Dict[str, Any]],
-) -> Tuple[float, int, int, int]:
+) -> Tuple[float, int, int, int, List[str]]:
     """
-    Compute total cost and basic counters.
+    Compute total cost.
 
     Returns:
-      total_cost, processed_rows, ignored_rows, unknown_products
+      total, processed_rows, ignored_rows, unknown_products, warnings
     """
     total = 0.0
     processed = 0
     ignored = 0
-    unknown_products = 0
+    unknown = 0
+    warnings: List[str] = []
 
     for idx, row in enumerate(sales_rows, start=1):
         product = row.get("Product")
         quantity = row.get("Quantity")
 
-        if not isinstance(product, str) or product.strip() == "":
+        if not isinstance(product, str) or not product.strip():
             ignored += 1
-            print(f"Warning (sales row {idx}): missing/invalid Product -> ignored")
+            warnings.append(f"Row #{idx}: missing/invalid Product -> skipped")
             continue
 
         try:
             qty = int(quantity)
         except (TypeError, ValueError):
             ignored += 1
-            print(
-                f"Warning (sales row {idx}): invalid Quantity '{quantity}' -> ignored"
-            )
+            warnings.append(f"Row #{idx}: invalid Quantity '{quantity}' for '{product}' -> skipped")
             continue
 
         if qty <= 0:
             ignored += 1
-            print(f"Warning (sales row {idx}): non-positive Quantity '{qty}' -> ignored")
+            warnings.append(f"Row #{idx}: non-positive Quantity '{qty}' for '{product}' -> skipped")
             continue
 
-        product_name = product.strip()
-        if product_name not in catalogue:
-            unknown_products += 1
+        key = product.strip()
+        if key not in price_map:
             ignored += 1
-            print(
-                f"Warning (sales row {idx}): product not in catalogue '{product_name}' "
-                "-> ignored"
-            )
+            unknown += 1
+            warnings.append(f"Row #{idx}: product not in catalogue '{key}' -> skipped")
             continue
 
-        price = catalogue[product_name]
-        total += price * qty
+        total += price_map[key] * qty
         processed += 1
 
-    return total, processed, ignored, unknown_products
+    return total, processed, ignored, unknown, warnings
 
 
 def build_output(
     catalogue_path: str,
     sales_path: str,
-    total_cost: float,
+    total: float,
     processed: int,
     ignored: int,
-    unknown_products: int,
+    unknown: int,
     elapsed_seconds: float,
+    warnings: List[str],
 ) -> str:
-    """Build human-readable output for console and file."""
-    return (
-        "=== SALES RESULTS ===\n"
-        f"Price catalogue: {os.path.basename(catalogue_path)}\n"
-        f"Sales record:    {os.path.basename(sales_path)}\n"
-        "\n"
-        f"Processed rows:  {processed}\n"
-        f"Ignored rows:    {ignored}\n"
-        f"Unknown products ignored: {unknown_products}\n"
-        "\n"
-        f"TOTAL COST: {fmt(total_cost)}\n"
-        f"Elapsed time (s): {elapsed_seconds:.6f}\n"
-    )
+    """Build a human-readable output string."""
+    lines: List[str] = []
+    lines.append("=== SALES RESULTS ===")
+    lines.append(f"Price catalogue: {os.path.basename(catalogue_path)}")
+    lines.append(f"Sales record:    {os.path.basename(sales_path)}")
+    lines.append("")
+    lines.append(f"Processed rows:  {processed}")
+    lines.append(f"Ignored rows:    {ignored}")
+    lines.append(f"Unknown products ignored: {unknown}")
+    lines.append("")
+    lines.append(f"TOTAL COST: {fmt(total)}")
+    lines.append(f"Elapsed time (s): {elapsed_seconds:.6f}")
 
+    if warnings:
+        lines.append("")
+        lines.append("Warnings:")
+        for w in warnings:
+            lines.append(f"- {w}")
 
-def append_results(output_text: str) -> None:
-    """Append results to SalesResults.txt (evidence)."""
-    with open(RESULTS_FILENAME, "a", encoding="utf-8") as file:
-        file.write("\n===== RUN =====\n")
-        file.write(output_text)
+    return "\n".join(lines)
 
 
 def parse_args(argv: List[str]) -> Tuple[str, str]:
-    """
-    Parse args in the exact minimal required format:
-      python computeSales.py priceCatalogue.json salesRecord.json
-    """
+    """Parse args exactly as required by Req 5."""
     if len(argv) != 3:
-        print("Usage: python computeSales.py priceCatalogue.json salesRecord.json")
-        raise SystemExit(2)
-
+        raise ValueError("Usage: python computeSales.py priceCatalogue.json salesRecord.json")
     return argv[1], argv[2]
 
 
-def main() -> None:
+def main(argv: List[str]) -> int:
     """Program entry point."""
     start = time.perf_counter()
-    catalogue_path, sales_path = parse_args(sys.argv)
 
     try:
-        catalogue_json = safe_load_json(catalogue_path)
-        sales_json = safe_load_json(sales_path)
-    except (FileNotFoundError, json.JSONDecodeError):
-        # Errores fatales: no se puede continuar sin archivos/JSON válido.
-        return
-
-    try:
-        catalogue = build_catalogue_map(catalogue_json)
-        sales_rows = extract_sales_rows(sales_json)
+        catalogue_path, sales_path = parse_args(argv)
     except ValueError as exc:
-        print(f"Error: {exc}")
-        return
+        msg = str(exc)
+        elapsed = time.perf_counter() - start
+        out = f"Error: {msg}\nElapsed time (s): {elapsed:.6f}\n"
+        print(out)
+        append_results(out)
+        return 2
 
-    total_cost, processed, ignored, unknown_products = compute_total(
-        catalogue, sales_rows
-    )
+    cat_data, cat_errors = load_json(catalogue_path)
+    sales_data, sales_errors = load_json(sales_path)
+
+    warnings: List[str] = []
+    warnings.extend(cat_errors)
+    warnings.extend(sales_errors)
+
+    if cat_data is None or sales_data is None:
+        elapsed = time.perf_counter() - start
+        out = build_output(
+            catalogue_path=catalogue_path,
+            sales_path=sales_path,
+            total=0.0,
+            processed=0,
+            ignored=0,
+            unknown=0,
+            elapsed_seconds=elapsed,
+            warnings=warnings,
+        )
+        print(out)
+        append_results(out)
+        for w in warnings:
+            warn(w)
+        return 1
+
+    price_map, map_errors = build_price_map(cat_data)
+    sales_rows, rows_errors = normalize_sales_record(sales_data)
+    warnings.extend(map_errors)
+    warnings.extend(rows_errors)
+
+    total, processed, ignored, unknown, compute_warnings = compute_total(price_map, sales_rows)
+    warnings.extend(compute_warnings)
+
     elapsed = time.perf_counter() - start
-
-    output_text = build_output(
+    out = build_output(
         catalogue_path=catalogue_path,
         sales_path=sales_path,
-        total_cost=total_cost,
+        total=total,
         processed=processed,
         ignored=ignored,
-        unknown_products=unknown_products,
+        unknown=unknown,
         elapsed_seconds=elapsed,
+        warnings=warnings,
     )
 
-    print(output_text)
-    append_results(output_text)
+    print(out)
+    append_results(out)
+
+    for w in warnings:
+        warn(w)
+
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main(sys.argv))
