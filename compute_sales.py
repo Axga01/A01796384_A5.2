@@ -5,8 +5,10 @@ Actividad 5.2 - Programa 1: Compute sales
 Invocación mínima (Req 5):
     python computeSales.py priceCatalogue.json salesRecord.json
 
-- priceCatalogue.json: catálogo con precios (lista de objetos con al menos: title, price)
-- salesRecord.json: registro de ventas (lista de objetos con al menos: Product, Quantity)
+- priceCatalogue.json: catálogo con precios
+  (lista de objetos con al menos: title, price)
+- salesRecord.json: registro de ventas
+  (lista de objetos con al menos: Product, Quantity)
 
 El programa:
 - Calcula el costo total: sum(price(Product) * Quantity)
@@ -22,11 +24,31 @@ import json
 import os
 import sys
 import time
+from dataclasses import dataclass
 from typing import Any, Dict, List, Tuple
 
 RESULTS_FILENAME = "SalesResults.txt"
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 RESULTS_PATH = os.path.join(SCRIPT_DIR, RESULTS_FILENAME)
+
+
+@dataclass(frozen=True)
+class Totals:
+    """Aggregated totals and counters."""
+    total: float
+    processed: int
+    ignored: int
+    unknown: int
+
+
+@dataclass(frozen=True)
+class RunInfo:
+    """All info needed to build the final output."""
+    catalogue_path: str
+    sales_path: str
+    totals: Totals
+    elapsed_seconds: float
+    warnings: List[str]
 
 
 def fmt(number: float) -> str:
@@ -47,6 +69,15 @@ def append_results(text: str) -> None:
         file.write("\n")
 
 
+def parse_args(argv: List[str]) -> Tuple[str, str]:
+    """Parse args exactly as required by Req 5."""
+    if len(argv) != 3:
+        raise ValueError(
+            "Usage: python computeSales.py priceCatalogue.json salesRecord.json"
+        )
+    return argv[1], argv[2]
+
+
 def load_json(path: str) -> Tuple[Any, List[str]]:
     """Load JSON from a file. Returns (data, errors)."""
     errors: List[str] = []
@@ -58,20 +89,14 @@ def load_json(path: str) -> Tuple[Any, List[str]]:
     except PermissionError:
         errors.append(f"Permission denied: {path}")
     except json.JSONDecodeError as exc:
-        errors.append(f"Invalid JSON in {path}: line {exc.lineno}, col {exc.colno}")
+        errors.append(
+            f"Invalid JSON in {path}: line {exc.lineno}, col {exc.colno}"
+        )
     return None, errors
 
 
 def build_price_map(catalogue: Any) -> Tuple[Dict[str, float], List[str]]:
-    """
-    Build a map: title -> price.
-
-    Expected format:
-      [
-        {"title": "...", "price": 28.1, ...},
-        ...
-      ]
-    """
+    """Build a map: title -> price."""
     if not isinstance(catalogue, list):
         return {}, ["Catalogue JSON must be a list of products."]
 
@@ -87,13 +112,17 @@ def build_price_map(catalogue: Any) -> Tuple[Dict[str, float], List[str]]:
         price = item.get("price")
 
         if not isinstance(title, str) or not title.strip():
-            errors.append(f"Catalogue row #{idx}: missing/invalid title -> ignored")
+            errors.append(
+                f"Catalogue row #{idx}: missing/invalid title -> ignored"
+            )
             continue
 
         try:
             price_value = float(price)
         except (TypeError, ValueError):
-            errors.append(f"Catalogue row #{idx}: invalid price for '{title}' -> ignored")
+            errors.append(
+                f"Catalogue row #{idx}: invalid price for '{title}' -> ignored"
+            )
             continue
 
         price_map[title.strip()] = price_value
@@ -104,15 +133,7 @@ def build_price_map(catalogue: Any) -> Tuple[Dict[str, float], List[str]]:
 
 
 def normalize_sales_record(sales: Any) -> Tuple[List[Dict[str, Any]], List[str]]:
-    """
-    Ensure sales is a list of dict rows.
-
-    Expected format:
-      [
-        {"Product": "...", "Quantity": 2, ...},
-        ...
-      ]
-    """
+    """Ensure sales is a list of dict rows."""
     if not isinstance(sales, list):
         return [], ["Sales JSON must be a list of sales rows."]
 
@@ -130,16 +151,49 @@ def normalize_sales_record(sales: Any) -> Tuple[List[Dict[str, Any]], List[str]]
     return rows, errors
 
 
+def _validate_row(
+    idx: int,
+    row: Dict[str, Any],
+    price_map: Dict[str, float],
+) -> Tuple[str, int, str]:
+    """
+    Validate a sales row and return (product_key, qty, warning_message).
+
+    If warning_message != "", caller should skip the row.
+    """
+    product = row.get("Product")
+    quantity = row.get("Quantity")
+
+    if not isinstance(product, str) or not product.strip():
+        return "", 0, f"Row #{idx}: missing/invalid Product -> skipped"
+
+    try:
+        qty = int(quantity)
+    except (TypeError, ValueError):
+        warning = (
+            f"Row #{idx}: invalid Quantity '{quantity}' for '{product}' -> skipped"
+        )
+        return "", 0, warning
+
+    if qty <= 0:
+        warning = (
+            f"Row #{idx}: non-positive Quantity '{qty}' for '{product}' -> skipped"
+        )
+        return "", 0, warning
+
+    key = product.strip()
+    if key not in price_map:
+        warning = f"Row #{idx}: product not in catalogue '{key}' -> skipped"
+        return "", 0, warning
+
+    return key, qty, ""
+
+
 def compute_total(
     price_map: Dict[str, float],
     sales_rows: List[Dict[str, Any]],
-) -> Tuple[float, int, int, int, List[str]]:
-    """
-    Compute total cost.
-
-    Returns:
-      total, processed_rows, ignored_rows, unknown_products, warnings
-    """
+) -> Tuple[Totals, List[str]]:
+    """Compute total cost and counters; returns (Totals, warnings)."""
     total = 0.0
     processed = 0
     ignored = 0
@@ -147,76 +201,94 @@ def compute_total(
     warnings: List[str] = []
 
     for idx, row in enumerate(sales_rows, start=1):
-        product = row.get("Product")
-        quantity = row.get("Quantity")
-
-        if not isinstance(product, str) or not product.strip():
+        key, qty, warning = _validate_row(idx, row, price_map)
+        if warning:
             ignored += 1
-            warnings.append(f"Row #{idx}: missing/invalid Product -> skipped")
-            continue
-
-        try:
-            qty = int(quantity)
-        except (TypeError, ValueError):
-            ignored += 1
-            warnings.append(f"Row #{idx}: invalid Quantity '{quantity}' for '{product}' -> skipped")
-            continue
-
-        if qty <= 0:
-            ignored += 1
-            warnings.append(f"Row #{idx}: non-positive Quantity '{qty}' for '{product}' -> skipped")
-            continue
-
-        key = product.strip()
-        if key not in price_map:
-            ignored += 1
-            unknown += 1
-            warnings.append(f"Row #{idx}: product not in catalogue '{key}' -> skipped")
+            if "not in catalogue" in warning:
+                unknown += 1
+            warnings.append(warning)
             continue
 
         total += price_map[key] * qty
         processed += 1
 
-    return total, processed, ignored, unknown, warnings
+    totals = Totals(
+        total=total,
+        processed=processed,
+        ignored=ignored,
+        unknown=unknown,
+    )
+    return totals, warnings
 
 
-def build_output(
-    catalogue_path: str,
-    sales_path: str,
-    total: float,
-    processed: int,
-    ignored: int,
-    unknown: int,
-    elapsed_seconds: float,
-    warnings: List[str],
-) -> str:
+def build_output(info: RunInfo) -> str:
     """Build a human-readable output string."""
     lines: List[str] = []
     lines.append("=== SALES RESULTS ===")
-    lines.append(f"Price catalogue: {os.path.basename(catalogue_path)}")
-    lines.append(f"Sales record:    {os.path.basename(sales_path)}")
+    lines.append(f"Price catalogue: {os.path.basename(info.catalogue_path)}")
+    lines.append(f"Sales record:    {os.path.basename(info.sales_path)}")
     lines.append("")
-    lines.append(f"Processed rows:  {processed}")
-    lines.append(f"Ignored rows:    {ignored}")
-    lines.append(f"Unknown products ignored: {unknown}")
+    lines.append(f"Processed rows:  {info.totals.processed}")
+    lines.append(f"Ignored rows:    {info.totals.ignored}")
+    lines.append(f"Unknown products ignored: {info.totals.unknown}")
     lines.append("")
-    lines.append(f"TOTAL COST: {fmt(total)}")
-    lines.append(f"Elapsed time (s): {elapsed_seconds:.6f}")
+    lines.append(f"TOTAL COST: {fmt(info.totals.total)}")
+    lines.append(f"Elapsed time (s): {info.elapsed_seconds:.6f}")
 
-    if warnings:
+    if info.warnings:
         lines.append("")
         lines.append("Warnings:")
-        for w in warnings:
+        for w in info.warnings:
             lines.append(f"- {w}")
 
     return "\n".join(lines)
 
 
-def parse_args(argv: List[str]) -> Tuple[str, str]:
-    """Parse args exactly as required by Req 5."""
-    if len(argv) != 3:
-        raise ValueError("Usage: python computeSales.py priceCatalogue.json salesRecord.json")
-    return argv[1], argv[2]
+def _emit(out: str, warnings: List[str]) -> None:
+    """Print and persist output and warnings."""
+    print(out)
+    append_results(out)
+    for w in warnings:
+        warn(w)
+
+
+def _run_compute(
+    catalogue_path: str,
+    sales_path: str,
+    start_time: float,
+) -> RunInfo:
+    """Run full pipeline and return RunInfo for output."""
+    cat_data, cat_errors = load_json(catalogue_path)
+    sales_data, sales_errors = load_json(sales_path)
+    warnings: List[str] = cat_errors + sales_errors
+
+    if cat_data is None or sales_data is None:
+        elapsed = time.perf_counter() - start_time
+        totals = Totals(total=0.0, processed=0, ignored=0, unknown=0)
+        return RunInfo(
+            catalogue_path=catalogue_path,
+            sales_path=sales_path,
+            totals=totals,
+            elapsed_seconds=elapsed,
+            warnings=warnings,
+        )
+
+    price_map, map_errors = build_price_map(cat_data)
+    sales_rows, rows_errors = normalize_sales_record(sales_data)
+    warnings.extend(map_errors)
+    warnings.extend(rows_errors)
+
+    totals, compute_warnings = compute_total(price_map, sales_rows)
+    warnings.extend(compute_warnings)
+
+    elapsed = time.perf_counter() - start_time
+    return RunInfo(
+        catalogue_path=catalogue_path,
+        sales_path=sales_path,
+        totals=totals,
+        elapsed_seconds=elapsed,
+        warnings=warnings,
+    )
 
 
 def main(argv: List[str]) -> int:
@@ -226,64 +298,17 @@ def main(argv: List[str]) -> int:
     try:
         catalogue_path, sales_path = parse_args(argv)
     except ValueError as exc:
-        msg = str(exc)
         elapsed = time.perf_counter() - start
-        out = f"Error: {msg}\nElapsed time (s): {elapsed:.6f}\n"
-        print(out)
-        append_results(out)
+        out = f"Error: {exc}\nElapsed time (s): {elapsed:.6f}\n"
+        _emit(out, [])
         return 2
 
-    cat_data, cat_errors = load_json(catalogue_path)
-    sales_data, sales_errors = load_json(sales_path)
+    info = _run_compute(catalogue_path, sales_path, start)
+    out = build_output(info)
+    _emit(out, info.warnings)
 
-    warnings: List[str] = []
-    warnings.extend(cat_errors)
-    warnings.extend(sales_errors)
-
-    if cat_data is None or sales_data is None:
-        elapsed = time.perf_counter() - start
-        out = build_output(
-            catalogue_path=catalogue_path,
-            sales_path=sales_path,
-            total=0.0,
-            processed=0,
-            ignored=0,
-            unknown=0,
-            elapsed_seconds=elapsed,
-            warnings=warnings,
-        )
-        print(out)
-        append_results(out)
-        for w in warnings:
-            warn(w)
+    if "File not found:" in "\n".join(info.warnings):
         return 1
-
-    price_map, map_errors = build_price_map(cat_data)
-    sales_rows, rows_errors = normalize_sales_record(sales_data)
-    warnings.extend(map_errors)
-    warnings.extend(rows_errors)
-
-    total, processed, ignored, unknown, compute_warnings = compute_total(price_map, sales_rows)
-    warnings.extend(compute_warnings)
-
-    elapsed = time.perf_counter() - start
-    out = build_output(
-        catalogue_path=catalogue_path,
-        sales_path=sales_path,
-        total=total,
-        processed=processed,
-        ignored=ignored,
-        unknown=unknown,
-        elapsed_seconds=elapsed,
-        warnings=warnings,
-    )
-
-    print(out)
-    append_results(out)
-
-    for w in warnings:
-        warn(w)
-
     return 0
 
 
