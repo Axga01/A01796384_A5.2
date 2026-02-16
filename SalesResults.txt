@@ -44,3 +44,49 @@ Warnings:
 - Row #33: non-positive Quantity '-35' for 'Fresh blueberries' -> skipped
 - Row #36: product not in catalogue 'Frijoles' -> skipped
 - Row #45: non-positive Quantity '-123' for 'Green smoothie' -> skipped
+
+===== RUN =====
+=== SALES RESULTS ===
+Price catalogue: TC1.ProductList.json
+Sales record:    TC1.Sales.json
+
+Processed rows:  46
+Ignored rows:    0
+Unknown products ignored: 0
+
+TOTAL COST: 2481.86
+Elapsed time (s): 0.000289
+
+===== RUN =====
+=== SALES RESULTS ===
+Price catalogue: TC1.ProductList.json
+Sales record:    TC2.Sales.json
+
+Processed rows:  44
+Ignored rows:    2
+Unknown products ignored: 0
+
+TOTAL COST: 169478.22
+Elapsed time (s): 0.000308
+
+Warnings:
+- Row #33: non-positive Quantity '-35' for 'Fresh blueberries' -> skipped
+- Row #45: non-positive Quantity '-123' for 'Green smoothie' -> skipped
+
+===== RUN =====
+=== SALES RESULTS ===
+Price catalogue: TC1.ProductList.json
+Sales record:    TC3.Sales.json
+
+Processed rows:  42
+Ignored rows:    4
+Unknown products ignored: 2
+
+TOTAL COST: 168145.36
+Elapsed time (s): 0.000300
+
+Warnings:
+- Row #22: product not in catalogue 'Elotes' -> skipped
+- Row #33: non-positive Quantity '-35' for 'Fresh blueberries' -> skipped
+- Row #36: product not in catalogue 'Frijoles' -> skipped
+- Row #45: non-positive Quantity '-123' for 'Green smoothie' -> skipped
